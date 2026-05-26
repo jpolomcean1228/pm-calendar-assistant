@@ -1,7 +1,8 @@
 // PM Calendar Assistant — backend server
 // ---------------------------------------
-// Step 2b: serves the frontend + accepts .ics file uploads.
-// Parses the calendar into the same shape MOCK_CALENDAR uses.
+// Step 2c (revised): serves the frontend and parses .ics uploads.
+// Claude analysis happens via copy/paste with claude.ai — no API
+// key needed on the server. .env is no longer required.
 
 const express = require('express');
 const multer = require('multer');
@@ -19,7 +20,7 @@ const upload = multer({
 
 // Serve static files (index.html, etc.) from the project root
 app.use(express.static(path.join(__dirname, '.')));
-app.use(express.json());
+app.use(express.json({ limit: '1mb' }));
 
 // ============================================================
 // POST /api/calendar/upload
@@ -31,7 +32,6 @@ app.post('/api/calendar/upload', upload.single('calendar'), (req, res) => {
     return res.status(400).json({ error: 'No file uploaded.' });
   }
 
-  // Optional weekOffset query param: 0 = this week, 1 = next, -1 = last
   const weekOffset = parseInt(req.query.weekOffset || '0', 10);
 
   let parsed;
@@ -53,14 +53,13 @@ app.post('/api/calendar/upload', upload.single('calendar'), (req, res) => {
 });
 
 // ============================================================
-// Helpers
+// Helpers — .ics parsing
 // ============================================================
 
-// Returns Monday 00:00 and Saturday 00:00 of the target week
 function getWeekRange(weekOffset) {
   const now = new Date();
-  const day = now.getDay(); // 0=Sun, 1=Mon, ..., 6=Sat
-  const daysFromMonday = (day + 6) % 7; // 0 if Mon, 6 if Sun
+  const day = now.getDay();
+  const daysFromMonday = (day + 6) % 7;
   const monday = new Date(now);
   monday.setDate(now.getDate() - daysFromMonday + weekOffset * 7);
   monday.setHours(0, 0, 0, 0);
@@ -69,41 +68,56 @@ function getWeekRange(weekOffset) {
   return { weekStart: monday, weekEnd: saturday };
 }
 
-// Walk parsed ICS, extract VEVENTs in the target week, including
-// expansion of recurring events.
 function extractEvents(parsed, weekStart, weekEnd) {
   const events = [];
-
   for (const key of Object.keys(parsed)) {
     const item = parsed[key];
     if (item.type !== 'VEVENT') continue;
 
-    // Handle recurring events: expand RRULE within the week
+    // Filter cancelled events
+    if (item.status === 'CANCELLED') continue;
+
+    // Filter all-day events (start at midnight + duration is multiple of 24h)
+    if (isAllDay(item)) continue;
+
     if (item.rrule) {
       const occurrences = item.rrule.between(weekStart, weekEnd, true);
       for (const occ of occurrences) {
-        // Check for exceptions (cancelled instances)
         if (isExcluded(item, occ)) continue;
         const duration = (item.end - item.start);
         const occEnd = new Date(occ.getTime() + duration);
-        events.push(toEvent(item, occ, occEnd));
+        const event = toEvent(item, occ, occEnd);
+        if (event.duration >= MIN_DURATION_MIN) events.push(event);
       }
     } else {
-      // Non-recurring: include if it overlaps the week
       const start = item.start;
       const end = item.end || new Date(start.getTime() + 30 * 60 * 1000);
       if (start >= weekStart && start < weekEnd) {
-        events.push(toEvent(item, start, end));
+        const event = toEvent(item, start, end);
+        if (event.duration >= MIN_DURATION_MIN) events.push(event);
       }
     }
   }
-
-  // Sort chronologically
   events.sort((a, b) => a._sortKey - b._sortKey);
-
-  // Strip the sort key before returning
   return events.map(({ _sortKey, ...rest }) => rest);
 }
+
+// Detect all-day events: start at exact midnight + duration is a whole-day multiple
+function isAllDay(item) {
+  if (!item.start || !item.end) return false;
+  const startMs = item.start.getTime();
+  const endMs = item.end.getTime();
+  const durMs = endMs - startMs;
+  const dayMs = 24 * 60 * 60 * 1000;
+  const startsAtMidnight = item.start.getHours() === 0 && item.start.getMinutes() === 0;
+  const wholeDayDuration = durMs > 0 && (durMs % dayMs === 0);
+  // Also catch ICS 'datetype' === 'date' marker if present
+  if (item.datetype === 'date') return true;
+  return startsAtMidnight && wholeDayDuration;
+}
+
+// Minimum meeting duration to surface — filters out 5-min standup placeholders, etc.
+const MIN_DURATION_MIN = 10;
 
 function isExcluded(item, occurrence) {
   if (!item.exdate) return false;
@@ -118,7 +132,6 @@ function toEvent(item, start, end) {
   const attendees = countAttendees(item);
   const day = DAY_NAMES[start.getDay()];
   const time = `${start.getHours()}:${String(start.getMinutes()).padStart(2, '0')}`;
-
   return {
     id: (item.uid || `event-${start.getTime()}`).slice(0, 64),
     title: String(item.summary || 'Untitled event').slice(0, 120),
@@ -126,20 +139,26 @@ function toEvent(item, start, end) {
     time,
     duration: durationMin,
     attendees,
-    owner: 'self',          // .ics doesn't distinguish; default to self
-    type: inferType(item),  // best-effort categorization
+    owner: 'self',
+    type: inferType(item),
     _sortKey: start.getTime()
   };
 }
 
 function countAttendees(item) {
   if (!item.attendee) return 1;
-  if (Array.isArray(item.attendee)) return item.attendee.length;
-  return 1; // single attendee object
+  const list = Array.isArray(item.attendee) ? item.attendee : [item.attendee];
+  if (list.length === 0) return 1;
+  // Dedupe by the underlying email/URI (organizer often appears in attendee list too)
+  const seen = new Set();
+  for (const a of list) {
+    const key = (a && (a.val || a.params?.CN || String(a))) || '';
+    seen.add(key.toLowerCase());
+  }
+  // Always count the user themselves, even if not in the list
+  return Math.max(seen.size, 1);
 }
 
-// Light-touch categorization based on title keywords.
-// Mirrors the `type` values used in the mock data.
 function inferType(item) {
   const title = (item.summary || '').toLowerCase();
   if (/1[:\s\-]?1|1on1|one.on.one/.test(title)) return '1on1';
