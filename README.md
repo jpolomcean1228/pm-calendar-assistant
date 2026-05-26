@@ -73,3 +73,4 @@ Search `index.html` for these markers:
 - Frontend: vanilla HTML/CSS/JS, no build
 - LLM: Claude Sonnet 4.6 via the messages endpoint
 - No backend yet
+# pm-calendar-assistant
