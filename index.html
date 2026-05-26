@@ -173,11 +173,18 @@
       <p class="header-sub">Week of <span id="week-label"></span> · prototype with mock data</p>
     </div>
     <div class="toolbar">
+      <button class="btn-secondary" onclick="changeWeek(-1)" title="Previous week">←</button>
+      <span id="week-nav-label" style="font-size: 12px; color: #666; min-width: 60px; text-align: center;">This week</span>
+      <button class="btn-secondary" onclick="changeWeek(1)" title="Next week">→</button>
       <select class="owner-select" id="owner-select">
-        <option value="self">My calendar (Alex Chen, PM)</option>
-        <option value="team">My team (4 reports)</option>
+        <option value="self">My calendar</option>
+        <option value="team">Team</option>
         <option value="both">Both</option>
       </select>
+      <label class="btn-secondary" style="cursor:pointer;">
+        📅 Upload .ics
+        <input type="file" id="ics-upload" accept=".ics" style="display:none;" />
+      </label>
       <button class="settings-btn" id="settings-btn" onclick="toggleSettings()">⚙ API key</button>
       <button class="btn-secondary" onclick="regenerate()">↻ Re-analyze</button>
     </div>
@@ -201,7 +208,7 @@
 
   <div class="grid">
     <div class="card">
-      <h2>Schedule <span class="badge" id="meeting-count"></span></h2>
+      <h2>Schedule <span class="badge" id="meeting-count"></span><span class="source-tag mock" id="cal-source-tag">Mock</span></h2>
       <div id="calendar"></div>
     </div>
 
@@ -224,11 +231,11 @@
 
 <script>
   // ============================================================
-  // EXT:CALENDAR_SOURCE — replace this with Google Calendar /
-  // Microsoft Graph fetch. Keep the shape: { id, title, day,
-  // time, duration, attendees, owner, type }.
+  // EXT:CALENDAR_SOURCE — Fallback calendar used when no .ics
+  // file has been uploaded. Upload via the toolbar button to
+  // replace this with real events.
   // ============================================================
-  const MOCK_CALENDAR = [
+  const FALLBACK_CALENDAR = [
     { id: 'm1', title: 'Sprint planning', day: 'Mon', time: '9:00', duration: 90, attendees: 8, owner: 'self', type: 'planning' },
     { id: 'm2', title: '1:1 with Priya', day: 'Mon', time: '11:00', duration: 30, attendees: 2, owner: 'self', type: '1on1' },
     { id: 'm3', title: 'Status update — Mobile team', day: 'Mon', time: '14:00', duration: 60, attendees: 12, owner: 'self', type: 'status' },
@@ -313,16 +320,24 @@
   let liveSuggestions = null;   // Populated by Claude API; null = use fallback
   let suggestionSource = 'mock'; // 'mock' | 'live' | 'loading' | 'error'
   let errorMessage = null;
+  let liveCalendar = null;       // Populated by .ics upload; null = use fallback
+  let calendarSource = 'mock';   // 'mock' | 'uploaded'
+  let weekOffset = 0;            // 0 = this week, -1 = last, 1 = next
+  let uploadedFile = null;       // Cached File object so we can re-fetch for week changes
 
   function currentSuggestions() {
     return liveSuggestions || FALLBACK_SUGGESTIONS;
+  }
+
+  function currentCalendar() {
+    return liveCalendar || FALLBACK_CALENDAR;
   }
 
   // ============================================================
   // Rendering
   // ============================================================
   function visibleMeetings() {
-    return MOCK_CALENDAR.filter(m => {
+    return currentCalendar().filter(m => {
       if (ownerFilter === 'both') return true;
       return m.owner === ownerFilter;
     });
@@ -375,6 +390,14 @@
 
     container.innerHTML = html || '<div class="empty">No meetings match this filter.</div>';
     document.getElementById('meeting-count').textContent = `${meetings.length} meetings`;
+    const calTag = document.getElementById('cal-source-tag');
+    if (calendarSource === 'uploaded') {
+      calTag.textContent = 'Uploaded';
+      calTag.className = 'source-tag';
+    } else {
+      calTag.textContent = 'Mock';
+      calTag.className = 'source-tag mock';
+    }
   }
 
   function renderSuggestions() {
@@ -400,7 +423,7 @@
       container.innerHTML = errorHtml + '<div class="empty">All clear — no pending suggestions.</div>';
     } else {
       container.innerHTML = errorHtml + sugs.map(s => {
-        const meeting = MOCK_CALENDAR.find(m => m.id === s.meetingId);
+        const meeting = currentCalendar().find(m => m.id === s.meetingId);
         if (!meeting) return ''; // Skip if Claude hallucinated a meeting ID
         const typeClass = `type-${s.kind}`;
         const typeLabel = s.kind.charAt(0).toUpperCase() + s.kind.slice(1);
@@ -663,6 +686,68 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
   }
 
   // ============================================================
+  // .ics upload — sends file to backend, swaps in real events
+  // ============================================================
+  async function handleUpload(file) {
+    if (!file) return;
+    uploadedFile = file;
+    await fetchCalendarForWeek();
+  }
+
+  async function fetchCalendarForWeek() {
+    if (!uploadedFile) return;
+
+    // Show transient loading state in calendar pane
+    document.getElementById('calendar').innerHTML =
+      '<div class="loading"><div class="spinner"></div>Parsing calendar…</div>';
+
+    const formData = new FormData();
+    formData.append('calendar', uploadedFile);
+
+    try {
+      const res = await fetch(`/api/calendar/upload?weekOffset=${weekOffset}`, {
+        method: 'POST',
+        body: formData
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({ error: 'Upload failed' }));
+        throw new Error(err.error || `HTTP ${res.status}`);
+      }
+      const data = await res.json();
+      liveCalendar = data.events;
+      calendarSource = 'uploaded';
+      // Reset applied/dismissed and clear stale Claude suggestions —
+      // they referenced different meeting IDs.
+      appliedIds.clear();
+      dismissedIds.clear();
+      liveSuggestions = null;
+      suggestionSource = 'mock';
+      renderCalendar();
+      renderSuggestions();
+      updateWeekLabel();
+    } catch (err) {
+      document.getElementById('calendar').innerHTML =
+        `<div class="error">${err.message}</div>`;
+    }
+  }
+
+  function changeWeek(delta) {
+    weekOffset += delta;
+    if (uploadedFile) {
+      fetchCalendarForWeek();
+    } else {
+      updateWeekLabel();
+    }
+  }
+
+  function updateWeekLabel() {
+    const label = document.getElementById('week-nav-label');
+    if (weekOffset === 0) label.textContent = 'This week';
+    else if (weekOffset === 1) label.textContent = 'Next week';
+    else if (weekOffset === -1) label.textContent = 'Last week';
+    else label.textContent = weekOffset > 0 ? `+${weekOffset} weeks` : `${weekOffset} weeks`;
+  }
+  // ============================================================
   // Wire up
   // ============================================================
   document.getElementById('week-label').textContent = getWeekLabel();
@@ -671,8 +756,12 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
     renderCalendar();
     renderSuggestions();
   });
+  document.getElementById('ics-upload').addEventListener('change', e => {
+    if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
+  });
 
   updateSettingsButton();
+  updateWeekLabel();
   renderCalendar();
   renderSuggestions();
 </script>

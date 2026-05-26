@@ -1,0 +1,27 @@
+{
+  "name": "pm-calendar-assistant",
+  "version": "1.0.0",
+  "description": "A prototype tool that connects to a project manager's calendar, identifies opportunities to save time, and either automates tasks via Claude or writes prep notes back to the calendar.",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jpolomcean1228/pm-calendar-assistant.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jpolomcean1228/pm-calendar-assistant/issues"
+  },
+  "homepage": "https://github.com/jpolomcean1228/pm-calendar-assistant#readme",
+  "dependencies": {
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "multer": "^2.1.1",
+    "node-ical": "^0.26.1"
+  }
+}
