@@ -185,6 +185,7 @@
         📅 Upload .ics
         <input type="file" id="ics-upload" accept=".ics" style="display:none;" />
       </label>
+      <button class="btn-secondary" onclick="openPromptModal()" id="prompt-btn">⚙ Prompt</button>
       <button class="btn-secondary" onclick="copyPromptToClipboard()">📋 Copy prompt</button>
       <button class="btn-secondary" onclick="openPasteModal()">📥 Paste response</button>
       <button class="btn-secondary" onclick="openBriefingModal()">📄 Briefing</button>
@@ -226,6 +227,26 @@
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="btn-secondary" onclick="closePasteModal()">Cancel</button>
       <button class="btn-primary" onclick="applyPastedResponse()">Apply suggestions</button>
+    </div>
+  </div>
+</div>
+
+<div id="prompt-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:12px; padding:24px; max-width:760px; width:100%; max-height:90vh; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0; font-size:18px; font-weight:500;">System prompt</h2>
+      <button class="btn-secondary" onclick="closePromptModal()" style="border:none; padding:4px 8px;">x</button>
+    </div>
+    <p style="margin:0; font-size:13px; color:#666; line-height:1.5;">
+      This is the instruction Claude uses to analyze your week. Edit to change the style, categories, or tone of suggestions. Saved in this browser only.
+    </p>
+    <textarea id="prompt-input" style="width:100%; flex:1; min-height:340px; padding:12px; font-family:monospace; font-size:12px; line-height:1.5; border:1px solid #d4d4d4; border-radius:8px; resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
+      <button class="btn-secondary" onclick="resetPromptToDefault()">Reset to default</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-secondary" onclick="closePromptModal()">Cancel</button>
+        <button class="btn-primary" onclick="savePrompt()">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -527,10 +548,46 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
   ]
 }`;
 
+  // Prompt editing
+  const PROMPT_STORAGE = 'pm-tool-system-prompt';
+  function activePrompt() {
+    return localStorage.getItem(PROMPT_STORAGE) || SYSTEM_PROMPT;
+  }
+  function openPromptModal() {
+    document.getElementById('prompt-input').value = activePrompt();
+    document.getElementById('prompt-modal').style.display = 'flex';
+  }
+  function closePromptModal() {
+    document.getElementById('prompt-modal').style.display = 'none';
+  }
+  function savePrompt() {
+    const val = document.getElementById('prompt-input').value.trim();
+    if (val && val !== SYSTEM_PROMPT) {
+      localStorage.setItem(PROMPT_STORAGE, val);
+    } else {
+      localStorage.removeItem(PROMPT_STORAGE);
+    }
+    updatePromptButton();
+    closePromptModal();
+  }
+  function resetPromptToDefault() {
+    if (!confirm('Reset to the default system prompt? Your edits will be lost.')) return;
+    localStorage.removeItem(PROMPT_STORAGE);
+    document.getElementById('prompt-input').value = SYSTEM_PROMPT;
+    updatePromptButton();
+  }
+  function updatePromptButton() {
+    const btn = document.getElementById('prompt-btn');
+    if (!btn) return;
+    const customized = !!localStorage.getItem(PROMPT_STORAGE);
+    btn.textContent = customized ? '⚙ Prompt •' : '⚙ Prompt';
+    btn.style.color = customized ? '#d97706' : '';
+  }
+
   function buildPrompt() {
     const meetings = visibleMeetings();
     const summary = analyzeWeek(meetings);
-    return `${SYSTEM_PROMPT}
+    return `${activePrompt()}
 
 Here is my upcoming week. Generate suggestions.
 
@@ -759,6 +816,7 @@ ${JSON.stringify(meetings, null, 2)}`;
       renderCalendar();
       renderSuggestions();
       updateWeekLabel();
+  updatePromptButton();
     } catch (err) {
       document.getElementById('calendar').innerHTML =
         `<div class="error">${err.message}</div>`;
