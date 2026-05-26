@@ -186,6 +186,7 @@
         <input type="file" id="ics-upload" accept=".ics" style="display:none;" />
       </label>
       <button class="btn-secondary" onclick="openPromptModal()" id="prompt-btn">⚙ Prompt</button>
+      <button class="btn-secondary" onclick="openContextModal()" id="context-btn">📝 Context</button>
       <button class="btn-secondary" onclick="copyPromptToClipboard()">📋 Copy prompt</button>
       <button class="btn-secondary" onclick="openPasteModal()">📥 Paste response</button>
       <button class="btn-secondary" onclick="openBriefingModal()">📄 Briefing</button>
@@ -227,6 +228,26 @@
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="btn-secondary" onclick="closePasteModal()">Cancel</button>
       <button class="btn-primary" onclick="applyPastedResponse()">Apply suggestions</button>
+    </div>
+  </div>
+</div>
+
+<div id="context-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:12px; padding:24px; max-width:560px; width:100%; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0; font-size:18px; font-weight:500;">This week's context</h2>
+      <button class="btn-secondary" onclick="closeContextModal()" style="border:none; padding:4px 8px;">x</button>
+    </div>
+    <p style="margin:0; font-size:13px; color:#666; line-height:1.5;">
+      A few sentences about what's going on, who's struggling, what you're prepping for. Claude uses this to make sharper, more personal suggestions.
+    </p>
+    <textarea id="context-input" placeholder="e.g. Preparing for Q1 launch on Friday. Priya is overwhelmed and may need help triaging. I want to spend Wed afternoon heads-down on the launch doc." style="width:100%; min-height:180px; padding:12px; font-size:14px; line-height:1.5; border:1px solid #d4d4d4; border-radius:8px; resize:vertical;"></textarea>
+    <div style="display:flex; gap:8px; justify-content:space-between; align-items:center;">
+      <button class="btn-secondary" onclick="clearContext()">Clear</button>
+      <div style="display:flex; gap:8px;">
+        <button class="btn-secondary" onclick="closeContextModal()">Cancel</button>
+        <button class="btn-primary" onclick="saveContext()">Save</button>
+      </div>
     </div>
   </div>
 </div>
@@ -568,6 +589,7 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
       localStorage.removeItem(PROMPT_STORAGE);
     }
     updatePromptButton();
+  updateContextButton();
     closePromptModal();
   }
   function resetPromptToDefault() {
@@ -584,10 +606,45 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
     btn.style.color = customized ? '#d97706' : '';
   }
 
+  // Context field
+  const CONTEXT_STORAGE = 'pm-tool-context';
+  function activeContext() {
+    return localStorage.getItem(CONTEXT_STORAGE) || '';
+  }
+  function openContextModal() {
+    document.getElementById('context-input').value = activeContext();
+    document.getElementById('context-modal').style.display = 'flex';
+  }
+  function closeContextModal() {
+    document.getElementById('context-modal').style.display = 'none';
+  }
+  function saveContext() {
+    const val = document.getElementById('context-input').value.trim();
+    if (val) localStorage.setItem(CONTEXT_STORAGE, val);
+    else localStorage.removeItem(CONTEXT_STORAGE);
+    updateContextButton();
+    closeContextModal();
+  }
+  function clearContext() {
+    if (!confirm('Clear this week\'s context?')) return;
+    localStorage.removeItem(CONTEXT_STORAGE);
+    document.getElementById('context-input').value = '';
+    updateContextButton();
+  }
+  function updateContextButton() {
+    const btn = document.getElementById('context-btn');
+    if (!btn) return;
+    const has = !!localStorage.getItem(CONTEXT_STORAGE);
+    btn.textContent = has ? '📝 Context •' : '📝 Context';
+    btn.style.color = has ? '#d97706' : '';
+  }
+
   function buildPrompt() {
     const meetings = visibleMeetings();
     const summary = analyzeWeek(meetings);
-    return `${activePrompt()}
+    const context = activeContext();
+    const contextSection = context ? `\n\n## Context the PM provided\n${context}` : '';
+    return `${activePrompt()}${contextSection}
 
 Here is my upcoming week. Generate suggestions.
 
