@@ -1,0 +1,678 @@
+<!--
+  PM Calendar Assistant — Prototype
+  ----------------------------------
+  Single-file demo. Mock data lives in MOCK_CALENDAR + MOCK_SUGGESTIONS at top.
+  Replace data layer with real Google Calendar / Outlook Graph API calls later.
+
+  Extension points (search for // EXT:):
+    EXT:CALENDAR_SOURCE  — swap mock fetch for real OAuth'd API call
+    EXT:AI_ENGINE        — swap heuristic suggestion generator for Claude API call
+    EXT:WRITEBACK        — swap console.log for real calendar event mutation
+    EXT:TEAM             — extend `owner` field to pull multiple team members
+-->
+<style>
+  :root { color-scheme: light dark; }
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
+    margin: 0;
+    padding: 24px;
+    background: #faf9f7;
+    color: #1a1a1a;
+    line-height: 1.5;
+  }
+  @media (prefers-color-scheme: dark) {
+    body { background: #1a1a1a; color: #f5f5f5; }
+    .card { background: #262626 !important; border-color: #3a3a3a !important; }
+    .meeting { background: #2a2a2a !important; }
+    .meeting.dimmed { opacity: 0.5; }
+    .pill-applied { background: #1f3a2e !important; color: #7fd9a8 !important; }
+    .header-sub { color: #888 !important; }
+    .day-label { color: #888 !important; }
+    .meeting-time { color: #aaa !important; }
+    .sug-meta { color: #888 !important; }
+    .btn-secondary { background: transparent !important; color: #ccc !important; border-color: #444 !important; }
+    .btn-secondary:hover { background: #2a2a2a !important; }
+    .empty { color: #888 !important; }
+    .note { background: #1a2e1f !important; color: #a8e0c0 !important; border-color: #2d5a3d !important; }
+  }
+  .shell { max-width: 1200px; margin: 0 auto; }
+  header { display: flex; justify-content: space-between; align-items: flex-end; margin-bottom: 24px; flex-wrap: wrap; gap: 12px; }
+  h1 { font-size: 22px; margin: 0 0 4px; font-weight: 500; }
+  .header-sub { font-size: 14px; color: #666; margin: 0; }
+  .toolbar { display: flex; gap: 8px; align-items: center; }
+  .owner-select {
+    font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid #d4d4d4; background: white; cursor: pointer;
+  }
+  .grid { display: grid; grid-template-columns: 1fr 380px; gap: 20px; }
+  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  .card {
+    background: white;
+    border: 1px solid #e5e5e5;
+    border-radius: 12px;
+    padding: 20px;
+  }
+  h2 { font-size: 15px; margin: 0 0 16px; font-weight: 500; display: flex; align-items: center; gap: 8px; }
+  .badge {
+    font-size: 11px; padding: 2px 8px; border-radius: 10px;
+    background: #fef3c7; color: #92400e; font-weight: 500;
+  }
+  .day { margin-bottom: 18px; }
+  .day-label { font-size: 12px; font-weight: 500; color: #666; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 8px; }
+  .meeting {
+    background: #fafaf9;
+    border-radius: 8px;
+    padding: 10px 12px;
+    margin-bottom: 6px;
+    border-left: 3px solid transparent;
+    transition: opacity 0.2s, transform 0.2s;
+  }
+  .meeting.has-sug { border-left-color: #d97706; }
+  .meeting.applied { border-left-color: #059669; }
+  .meeting-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+  .meeting-title { font-size: 14px; font-weight: 500; }
+  .meeting-time { font-size: 12px; color: #666; white-space: nowrap; }
+  .meeting-meta { font-size: 12px; color: #666; margin-top: 2px; }
+  .note {
+    margin-top: 8px; padding: 8px 10px; background: #ecfdf5; color: #047857;
+    font-size: 12px; border-radius: 6px; border: 1px solid #a7f3d0;
+    display: flex; gap: 6px; align-items: flex-start;
+  }
+  .note-icon { flex-shrink: 0; margin-top: 1px; }
+  .sug { padding: 14px 0; border-bottom: 1px solid #f0f0f0; }
+  .sug:last-child { border-bottom: none; }
+  .sug-title { font-size: 13px; font-weight: 500; margin: 0 0 4px; }
+  .sug-meta { font-size: 11px; color: #666; margin-bottom: 8px; display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .sug-saved { color: #059669; font-weight: 500; }
+  .sug-body { font-size: 13px; margin: 0 0 10px; line-height: 1.5; }
+  .sug-actions { display: flex; gap: 6px; }
+  button {
+    font-family: inherit; font-size: 12px; padding: 5px 12px;
+    border-radius: 6px; cursor: pointer; border: 1px solid transparent;
+    font-weight: 500; transition: all 0.15s;
+  }
+  .btn-primary { background: #1a1a1a; color: white; }
+  .btn-primary:hover { background: #000; }
+  .btn-secondary { background: white; color: #555; border-color: #d4d4d4; }
+  .btn-secondary:hover { background: #f5f5f5; }
+  .pill-applied {
+    display: inline-flex; align-items: center; gap: 4px;
+    font-size: 11px; padding: 3px 8px; border-radius: 10px;
+    background: #d1fae5; color: #065f46; font-weight: 500;
+  }
+  .empty { font-size: 13px; color: #999; text-align: center; padding: 24px 0; }
+  .stats { display: flex; gap: 16px; margin-bottom: 16px; padding-bottom: 16px; border-bottom: 1px solid #f0f0f0; }
+  .stat { flex: 1; }
+  .stat-num { font-size: 22px; font-weight: 500; }
+  .stat-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 0.04em; }
+  .type-tag {
+    display: inline-block; font-size: 10px; padding: 1px 6px; border-radius: 4px;
+    text-transform: uppercase; letter-spacing: 0.04em; font-weight: 500;
+  }
+  .type-automate { background: #ede9fe; color: #5b21b6; }
+  .type-prep { background: #dbeafe; color: #1e40af; }
+  .type-protect { background: #fee2e2; color: #991b1b; }
+
+  /* Settings panel */
+  .settings-btn {
+    font-size: 13px; padding: 6px 10px; border-radius: 8px;
+    border: 1px solid #d4d4d4; background: white; cursor: pointer;
+  }
+  .settings-btn.unset { border-color: #d97706; color: #92400e; background: #fef3c7; }
+  .settings-panel {
+    background: white; border: 1px solid #e5e5e5; border-radius: 12px;
+    padding: 16px 20px; margin-bottom: 20px; display: none;
+  }
+  .settings-panel.open { display: block; }
+  .settings-panel label { font-size: 12px; font-weight: 500; color: #555; display: block; margin-bottom: 6px; }
+  .settings-panel input {
+    width: 100%; padding: 8px 10px; border: 1px solid #d4d4d4; border-radius: 6px;
+    font-family: monospace; font-size: 12px;
+  }
+  .settings-row { display: flex; gap: 8px; align-items: flex-end; }
+  .settings-row > div:first-child { flex: 1; }
+  .settings-hint { font-size: 11px; color: #888; margin-top: 6px; }
+  .settings-hint a { color: #555; }
+
+  /* Loading / error states */
+  .loading {
+    display: flex; align-items: center; gap: 8px; padding: 16px;
+    font-size: 13px; color: #666;
+  }
+  .spinner {
+    width: 14px; height: 14px; border: 2px solid #ddd; border-top-color: #1a1a1a;
+    border-radius: 50%; animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .error {
+    background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b;
+    padding: 10px 12px; border-radius: 6px; font-size: 12px; margin-bottom: 12px;
+  }
+  .source-tag {
+    font-size: 10px; padding: 2px 6px; border-radius: 4px; margin-left: 6px;
+    background: #ede9fe; color: #5b21b6; font-weight: 500;
+    text-transform: uppercase; letter-spacing: 0.04em;
+  }
+  .source-tag.mock { background: #f3f4f6; color: #6b7280; }
+
+  @media (prefers-color-scheme: dark) {
+    .settings-panel { background: #262626 !important; border-color: #3a3a3a !important; }
+    .settings-panel input { background: #1a1a1a !important; border-color: #444 !important; color: #f5f5f5 !important; }
+    .settings-btn { background: #262626 !important; border-color: #444 !important; color: #ccc !important; }
+    .settings-btn.unset { background: #3d2c0a !important; color: #fbbf24 !important; border-color: #92400e !important; }
+    .error { background: #3d1a1a !important; color: #fca5a5 !important; border-color: #7f1d1d !important; }
+    .source-tag.mock { background: #2a2a2a !important; color: #888 !important; }
+  }
+</style>
+
+<div class="shell">
+  <header>
+    <div>
+      <h1>Calendar assistant</h1>
+      <p class="header-sub">Week of <span id="week-label"></span> · prototype with mock data</p>
+    </div>
+    <div class="toolbar">
+      <select class="owner-select" id="owner-select">
+        <option value="self">My calendar (Alex Chen, PM)</option>
+        <option value="team">My team (4 reports)</option>
+        <option value="both">Both</option>
+      </select>
+      <button class="settings-btn" id="settings-btn" onclick="toggleSettings()">⚙ API key</button>
+      <button class="btn-secondary" onclick="regenerate()">↻ Re-analyze</button>
+    </div>
+  </header>
+
+  <div class="settings-panel" id="settings-panel">
+    <label for="api-key">Anthropic API key</label>
+    <div class="settings-row">
+      <div>
+        <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off" />
+      </div>
+      <button class="btn-primary" onclick="saveKey()">Save</button>
+      <button class="btn-secondary" onclick="clearKey()">Clear</button>
+    </div>
+    <p class="settings-hint">
+      Stored only in your browser's localStorage. Get a key at
+      <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
+      Without a key, the demo falls back to canned mock suggestions.
+    </p>
+  </div>
+
+  <div class="grid">
+    <div class="card">
+      <h2>Schedule <span class="badge" id="meeting-count"></span></h2>
+      <div id="calendar"></div>
+    </div>
+
+    <div class="card">
+      <h2>Suggestions <span class="badge" id="sug-count"></span><span class="source-tag mock" id="source-tag">Mock</span></h2>
+      <div class="stats">
+        <div class="stat">
+          <div class="stat-num" id="time-saved">0h</div>
+          <div class="stat-label">Time back</div>
+        </div>
+        <div class="stat">
+          <div class="stat-num" id="applied-count">0</div>
+          <div class="stat-label">Applied</div>
+        </div>
+      </div>
+      <div id="suggestions"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+  // ============================================================
+  // EXT:CALENDAR_SOURCE — replace this with Google Calendar /
+  // Microsoft Graph fetch. Keep the shape: { id, title, day,
+  // time, duration, attendees, owner, type }.
+  // ============================================================
+  const MOCK_CALENDAR = [
+    { id: 'm1', title: 'Sprint planning', day: 'Mon', time: '9:00', duration: 90, attendees: 8, owner: 'self', type: 'planning' },
+    { id: 'm2', title: '1:1 with Priya', day: 'Mon', time: '11:00', duration: 30, attendees: 2, owner: 'self', type: '1on1' },
+    { id: 'm3', title: 'Status update — Mobile team', day: 'Mon', time: '14:00', duration: 60, attendees: 12, owner: 'self', type: 'status' },
+    { id: 'm4', title: 'Roadmap review with leadership', day: 'Tue', time: '10:00', duration: 60, attendees: 5, owner: 'self', type: 'review' },
+    { id: 'm5', title: 'Vendor check-in (Acme)', day: 'Tue', time: '13:30', duration: 45, attendees: 3, owner: 'self', type: 'external' },
+    { id: 'm6', title: 'Weekly status report (focus block)', day: 'Tue', time: '15:00', duration: 60, attendees: 1, owner: 'self', type: 'focus' },
+    { id: 'm7', title: 'Engineering all-hands', day: 'Wed', time: '9:30', duration: 60, attendees: 45, owner: 'team', type: 'broadcast' },
+    { id: 'm8', title: 'Design sync', day: 'Wed', time: '11:00', duration: 30, attendees: 4, owner: 'self', type: 'sync' },
+    { id: 'm9', title: '1:1 with Marcus', day: 'Wed', time: '14:00', duration: 30, attendees: 2, owner: 'self', type: '1on1' },
+    { id: 'm10', title: 'Status update — Mobile team', day: 'Wed', time: '15:30', duration: 60, attendees: 12, owner: 'self', type: 'status' },
+    { id: 'm11', title: 'Stakeholder update prep', day: 'Thu', time: '10:00', duration: 45, attendees: 1, owner: 'self', type: 'focus' },
+    { id: 'm12', title: 'Cross-team coordination', day: 'Thu', time: '13:00', duration: 60, attendees: 7, owner: 'self', type: 'sync' },
+    { id: 'm13', title: 'Retro — Q4 launch', day: 'Thu', time: '15:00', duration: 60, attendees: 9, owner: 'self', type: 'retro' },
+    { id: 'm14', title: 'Status update — Mobile team', day: 'Fri', time: '10:00', duration: 60, attendees: 12, owner: 'self', type: 'status' },
+    { id: 'm15', title: 'Customer interview — Globex', day: 'Fri', time: '14:00', duration: 45, attendees: 3, owner: 'self', type: 'external' },
+  ];
+
+  // ============================================================
+  // EXT:AI_ENGINE — Fallback suggestions used when no API key is
+  // configured. When a key is set, real Claude suggestions are
+  // fetched via callClaude() below and override this list.
+  // ============================================================
+  const FALLBACK_SUGGESTIONS = [
+    {
+      id: 's1', meetingId: 'm3', kind: 'automate', savedMin: 45,
+      title: 'Auto-generate status update from Jira',
+      body: 'This recurring status meeting pulls from the same Jira board each week. I can draft the update from ticket activity and post to the channel — you only join if questions come up.',
+      note: 'Status drafted by Claude from Jira — review before 1:50 PM',
+      action: 'Generate draft + shorten meeting to 15 min'
+    },
+    {
+      id: 's2', meetingId: 'm2', kind: 'prep', savedMin: 10,
+      title: 'Prep notes for Priya 1:1',
+      body: 'Pulling Priya\'s recent PRs, blocked tickets, and items from your last 1:1 doc. Three topics worth raising: the deploy pipeline issue, her career convo follow-up, and the on-call rotation.',
+      note: 'Pre-read: 3 topics + her open PRs (link in description)',
+      action: 'Add prep notes to event description'
+    },
+    {
+      id: 's3', meetingId: 'm10', kind: 'protect', savedMin: 60,
+      title: 'Decline duplicate status meeting',
+      body: 'You already have the Mon status meeting with the same group. Wednesday\'s seems to be a holdover. Suggest declining and consolidating, or making Wed async.',
+      note: 'Proposed: convert to async update — see Mon meeting',
+      action: 'Decline + send async-update proposal'
+    },
+    {
+      id: 's4', meetingId: 'm11', kind: 'automate', savedMin: 30,
+      title: 'Draft stakeholder update',
+      body: 'I can pull last week\'s shipped items, this week\'s blockers, and key metric movements into your standard stakeholder template. You spend the focus block reviewing instead of writing.',
+      note: 'Draft ready in shared doc — review only',
+      action: 'Generate draft from team activity'
+    },
+    {
+      id: 's5', meetingId: 'm5', kind: 'prep', savedMin: 8,
+      title: 'Acme account brief',
+      body: 'Last touchpoint was 3 weeks ago. Open items: contract renewal date, the API limit issue they raised, and the feature request from their CTO. Summary attached.',
+      note: 'Account brief in description — 3 open items',
+      action: 'Add brief + open items to event'
+    },
+    {
+      id: 's6', meetingId: 'm13', kind: 'prep', savedMin: 20,
+      title: 'Compile retro inputs',
+      body: 'Collecting wins, misses, and action items from the team\'s retro board. I can also surface unresolved items from the last retro that didn\'t get addressed.',
+      note: 'Retro inputs + carryover items compiled',
+      action: 'Generate retro pre-read'
+    },
+    {
+      id: 's7', meetingId: 'm1', kind: 'automate', savedMin: 15,
+      title: 'Auto-prioritize sprint backlog',
+      body: 'Before sprint planning, I can rank the backlog by team\'s velocity, blocker severity, and stakeholder priority — so you walk in with a sorted list instead of sorting live.',
+      note: 'Ranked backlog in planning doc',
+      action: 'Generate prioritized backlog'
+    },
+  ];
+
+  // ============================================================
+  // State
+  // ============================================================
+  const DAYS = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri'];
+  let appliedIds = new Set();
+  let dismissedIds = new Set();
+  let ownerFilter = 'self';
+  let liveSuggestions = null;   // Populated by Claude API; null = use fallback
+  let suggestionSource = 'mock'; // 'mock' | 'live' | 'loading' | 'error'
+  let errorMessage = null;
+
+  function currentSuggestions() {
+    return liveSuggestions || FALLBACK_SUGGESTIONS;
+  }
+
+  // ============================================================
+  // Rendering
+  // ============================================================
+  function visibleMeetings() {
+    return MOCK_CALENDAR.filter(m => {
+      if (ownerFilter === 'both') return true;
+      return m.owner === ownerFilter;
+    });
+  }
+
+  function visibleSuggestions() {
+    const meetingIds = new Set(visibleMeetings().map(m => m.id));
+    return currentSuggestions().filter(s =>
+      meetingIds.has(s.meetingId) && !dismissedIds.has(s.id)
+    );
+  }
+
+  function activeSuggestions() {
+    return visibleSuggestions().filter(s => !appliedIds.has(s.id));
+  }
+
+  function renderCalendar() {
+    const meetings = visibleMeetings();
+    const sugByMeeting = {};
+    currentSuggestions().forEach(s => { sugByMeeting[s.meetingId] = s; });
+
+    const container = document.getElementById('calendar');
+    let html = '';
+
+    DAYS.forEach(day => {
+      const dayMeetings = meetings.filter(m => m.day === day);
+      if (dayMeetings.length === 0) return;
+      html += `<div class="day"><div class="day-label">${day}</div>`;
+      dayMeetings.forEach(m => {
+        const sug = sugByMeeting[m.id];
+        const isApplied = sug && appliedIds.has(sug.id);
+        const hasActive = sug && !appliedIds.has(sug.id) && !dismissedIds.has(sug.id);
+        const cls = isApplied ? 'meeting applied' : (hasActive ? 'meeting has-sug' : 'meeting');
+        const endTime = addMinutes(m.time, m.duration);
+        html += `
+          <div class="${cls}">
+            <div class="meeting-row">
+              <div>
+                <div class="meeting-title">${m.title}</div>
+                <div class="meeting-meta">${m.attendees} ${m.attendees === 1 ? 'attendee' : 'attendees'} · ${m.duration} min</div>
+              </div>
+              <div class="meeting-time">${m.time}–${endTime}</div>
+            </div>
+            ${isApplied ? `<div class="note"><span class="note-icon">✓</span><span>${sug.note}</span></div>` : ''}
+          </div>
+        `;
+      });
+      html += '</div>';
+    });
+
+    container.innerHTML = html || '<div class="empty">No meetings match this filter.</div>';
+    document.getElementById('meeting-count').textContent = `${meetings.length} meetings`;
+  }
+
+  function renderSuggestions() {
+    const container = document.getElementById('suggestions');
+    const sourceTag = document.getElementById('source-tag');
+
+    // Loading state
+    if (suggestionSource === 'loading') {
+      container.innerHTML = '<div class="loading"><div class="spinner"></div>Claude is analyzing your schedule…</div>';
+      sourceTag.textContent = 'Loading';
+      sourceTag.className = 'source-tag mock';
+      document.getElementById('sug-count').textContent = '…';
+      return;
+    }
+
+    const sugs = activeSuggestions();
+    let errorHtml = '';
+    if (suggestionSource === 'error' && errorMessage) {
+      errorHtml = `<div class="error"><strong>Claude API error:</strong> ${errorMessage}<br>Showing fallback suggestions.</div>`;
+    }
+
+    if (sugs.length === 0) {
+      container.innerHTML = errorHtml + '<div class="empty">All clear — no pending suggestions.</div>';
+    } else {
+      container.innerHTML = errorHtml + sugs.map(s => {
+        const meeting = MOCK_CALENDAR.find(m => m.id === s.meetingId);
+        if (!meeting) return ''; // Skip if Claude hallucinated a meeting ID
+        const typeClass = `type-${s.kind}`;
+        const typeLabel = s.kind.charAt(0).toUpperCase() + s.kind.slice(1);
+        return `
+          <div class="sug">
+            <div class="sug-title">${escapeHtml(s.title)}</div>
+            <div class="sug-meta">
+              <span class="type-tag ${typeClass}">${typeLabel}</span>
+              <span>${meeting.day} ${meeting.time} · ${escapeHtml(meeting.title)}</span>
+              <span class="sug-saved">+${s.savedMin} min</span>
+            </div>
+            <p class="sug-body">${escapeHtml(s.body)}</p>
+            <div class="sug-actions">
+              <button class="btn-primary" onclick="apply('${s.id}')">${escapeHtml(s.action)}</button>
+              <button class="btn-secondary" onclick="dismiss('${s.id}')">Dismiss</button>
+            </div>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // Stats
+    const applied = currentSuggestions().filter(s => appliedIds.has(s.id));
+    const savedMin = applied.reduce((sum, s) => sum + s.savedMin, 0);
+    document.getElementById('time-saved').textContent = formatHours(savedMin);
+    document.getElementById('applied-count').textContent = applied.length;
+    document.getElementById('sug-count').textContent = `${sugs.length} pending`;
+
+    // Source tag
+    if (suggestionSource === 'live') {
+      sourceTag.textContent = 'Live · Claude';
+      sourceTag.className = 'source-tag';
+    } else {
+      sourceTag.textContent = 'Mock';
+      sourceTag.className = 'source-tag mock';
+    }
+  }
+
+  function escapeHtml(s) {
+    return String(s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+
+  // ============================================================
+  // EXT:WRITEBACK — In production, this would call the calendar
+  // API to update event description, decline meeting, etc.
+  // ============================================================
+  function apply(sugId) {
+    const sug = currentSuggestions().find(s => s.id === sugId);
+    if (!sug) return;
+    console.log('[WRITEBACK] Would update calendar event', sug.meetingId, 'with note:', sug.note);
+    appliedIds.add(sugId);
+    renderCalendar();
+    renderSuggestions();
+  }
+
+  function dismiss(sugId) {
+    dismissedIds.add(sugId);
+    renderSuggestions();
+  }
+
+  async function regenerate() {
+    appliedIds.clear();
+    dismissedIds.clear();
+
+    const key = getApiKey();
+    if (!key) {
+      // No key — use fallback
+      liveSuggestions = null;
+      suggestionSource = 'mock';
+      errorMessage = null;
+      renderCalendar();
+      renderSuggestions();
+      return;
+    }
+
+    // Show loading
+    suggestionSource = 'loading';
+    errorMessage = null;
+    renderSuggestions();
+
+    try {
+      const meetings = visibleMeetings();
+      const suggestions = await callClaude(key, meetings);
+      liveSuggestions = suggestions;
+      suggestionSource = 'live';
+    } catch (err) {
+      console.error(err);
+      errorMessage = err.message || 'Unknown error';
+      liveSuggestions = null;
+      suggestionSource = 'error';
+    }
+
+    renderCalendar();
+    renderSuggestions();
+  }
+
+  // ============================================================
+  // Claude API integration
+  // ============================================================
+  const SYSTEM_PROMPT = `You are a productivity assistant for a busy product manager. You analyze their calendar and identify three kinds of suggestions:
+
+1. AUTOMATE: tasks Claude can do on the PM's behalf (drafting status updates, prioritizing backlogs, compiling pre-reads from Jira/Linear/docs, sending follow-ups). Save 15-60 min each.
+2. PREP: meeting prep notes Claude can attach to the event (1:1 talking points, account briefs, retro pre-reads). Save 5-20 min each.
+3. PROTECT: schedule hygiene — duplicate/redundant meetings to decline, oversized attendee lists, meetings that should be async. Save 30-60 min each.
+
+Be specific and grounded in the meeting details. Don't hallucinate context you don't have — base suggestions on the meeting title, duration, attendee count, and recurring patterns visible in the schedule. Quality over quantity: 4-7 strong suggestions beats 10 generic ones.
+
+You MUST respond with a JSON object matching this exact schema, with no preamble or markdown:
+
+{
+  "suggestions": [
+    {
+      "id": "s1",
+      "meetingId": "<must match an id from the input meetings>",
+      "kind": "automate" | "prep" | "protect",
+      "savedMin": <integer minutes saved>,
+      "title": "<short title, max 60 chars>",
+      "body": "<2-3 sentence rationale, what Claude will actually do>",
+      "note": "<short calendar note to write back, max 80 chars>",
+      "action": "<button label, what happens when PM clicks apply, max 50 chars>"
+    }
+  ]
+}`;
+
+  async function callClaude(apiKey, meetings) {
+    const userPrompt = `Here is my upcoming week. Generate suggestions.\n\n${JSON.stringify(meetings, null, 2)}`;
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'anthropic-dangerous-direct-browser-access': 'true'
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 2048,
+        system: SYSTEM_PROMPT,
+        messages: [{ role: 'user', content: userPrompt }]
+      })
+    });
+
+    if (!response.ok) {
+      const errBody = await response.text();
+      let msg = `HTTP ${response.status}`;
+      try {
+        const parsed = JSON.parse(errBody);
+        if (parsed.error && parsed.error.message) msg = parsed.error.message;
+      } catch (_) {}
+      throw new Error(msg);
+    }
+
+    const data = await response.json();
+    const text = (data.content || []).map(b => b.text || '').join('').trim();
+
+    // Strip markdown fences if Claude wrapped them despite instructions
+    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+
+    let parsed;
+    try {
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      throw new Error('Claude returned malformed JSON. See console for raw response.');
+    }
+
+    if (!parsed.suggestions || !Array.isArray(parsed.suggestions)) {
+      throw new Error('Response missing suggestions array.');
+    }
+
+    // Validate + filter
+    const validKinds = new Set(['automate', 'prep', 'protect']);
+    const meetingIds = new Set(meetings.map(m => m.id));
+    return parsed.suggestions
+      .filter(s => s && s.meetingId && meetingIds.has(s.meetingId) && validKinds.has(s.kind))
+      .map((s, i) => ({
+        id: s.id || `live-${i}`,
+        meetingId: s.meetingId,
+        kind: s.kind,
+        savedMin: Number(s.savedMin) || 15,
+        title: String(s.title || 'Untitled suggestion').slice(0, 80),
+        body: String(s.body || ''),
+        note: String(s.note || '').slice(0, 100),
+        action: String(s.action || 'Apply').slice(0, 60)
+      }));
+  }
+
+  // ============================================================
+  // API key management (localStorage)
+  // ============================================================
+  const KEY_STORAGE = 'pm-tool-anthropic-key';
+  function getApiKey() {
+    return localStorage.getItem(KEY_STORAGE) || '';
+  }
+  function saveKey() {
+    const val = document.getElementById('api-key').value.trim();
+    if (val) localStorage.setItem(KEY_STORAGE, val);
+    document.getElementById('settings-panel').classList.remove('open');
+    updateSettingsButton();
+    // Trigger an analyze run with the new key
+    regenerate();
+  }
+  function clearKey() {
+    localStorage.removeItem(KEY_STORAGE);
+    document.getElementById('api-key').value = '';
+    updateSettingsButton();
+    // Fall back to mock
+    liveSuggestions = null;
+    suggestionSource = 'mock';
+    errorMessage = null;
+    renderCalendar();
+    renderSuggestions();
+  }
+  function toggleSettings() {
+    const panel = document.getElementById('settings-panel');
+    panel.classList.toggle('open');
+    if (panel.classList.contains('open')) {
+      document.getElementById('api-key').value = getApiKey();
+    }
+  }
+  function updateSettingsButton() {
+    const btn = document.getElementById('settings-btn');
+    if (getApiKey()) {
+      btn.textContent = '⚙ API key set';
+      btn.classList.remove('unset');
+    } else {
+      btn.textContent = '⚙ Add API key';
+      btn.classList.add('unset');
+    }
+  }
+
+  // ============================================================
+  // Helpers
+  // ============================================================
+  function addMinutes(time, mins) {
+    const [h, m] = time.split(':').map(Number);
+    const total = h * 60 + m + mins;
+    const nh = Math.floor(total / 60);
+    const nm = total % 60;
+    return `${nh}:${String(nm).padStart(2, '0')}`;
+  }
+
+  function formatHours(mins) {
+    if (mins === 0) return '0h';
+    const h = Math.floor(mins / 60);
+    const m = mins % 60;
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}h`;
+    return `${h}h ${m}m`;
+  }
+
+  function getWeekLabel() {
+    const today = new Date();
+    const monday = new Date(today);
+    monday.setDate(today.getDate() - ((today.getDay() + 6) % 7));
+    const friday = new Date(monday);
+    friday.setDate(monday.getDate() + 4);
+    const fmt = d => d.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    return `${fmt(monday)} – ${fmt(friday)}`;
+  }
+
+  // ============================================================
+  // Wire up
+  // ============================================================
+  document.getElementById('week-label').textContent = getWeekLabel();
+  document.getElementById('owner-select').addEventListener('change', e => {
+    ownerFilter = e.target.value;
+    renderCalendar();
+    renderSuggestions();
+  });
+
+  updateSettingsButton();
+  renderCalendar();
+  renderSuggestions();
+</script>
