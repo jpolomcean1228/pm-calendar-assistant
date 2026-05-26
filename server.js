@@ -141,8 +141,65 @@ function toEvent(item, start, end) {
     attendees,
     owner: 'self',
     type: inferType(item),
+    description: extractDescription(item),
+    location: extractLocation(item),
+    organizer: extractOrganizer(item),
+    attendeeList: extractAttendees(item),
+    meetingUrl: extractMeetingUrl(item),
+    recurrence: item.rrule ? describeRecurrence(item.rrule) : null,
     _sortKey: start.getTime()
   };
+}
+
+function extractDescription(item) {
+  const raw = item.description || '';
+  return String(raw).slice(0, 2000);
+}
+
+function extractLocation(item) {
+  if (!item.location) return '';
+  return String(item.location).slice(0, 200);
+}
+
+function extractOrganizer(item) {
+  if (!item.organizer) return '';
+  const o = item.organizer;
+  if (typeof o === 'string') return o.replace(/^mailto:/i, '').slice(0, 120);
+  return String(o.val || (o.params && o.params.CN) || '').replace(/^mailto:/i, '').slice(0, 120);
+}
+
+function extractAttendees(item) {
+  if (!item.attendee) return [];
+  const list = Array.isArray(item.attendee) ? item.attendee : [item.attendee];
+  const out = [];
+  const seen = new Set();
+  for (const a of list) {
+    if (!a) continue;
+    const email = (a.val || String(a)).replace(/^mailto:/i, '').toLowerCase();
+    if (seen.has(email)) continue;
+    seen.add(email);
+    const name = (a.params && a.params.CN) || email.split('@')[0];
+    out.push({ name: String(name).slice(0, 80), email: email.slice(0, 120) });
+    if (out.length >= 30) break;
+  }
+  return out;
+}
+
+function extractMeetingUrl(item) {
+  const candidates = [item.location, item.description].filter(Boolean).join(' ');
+  const m = candidates.match(/https?:\/\/(?:[^\s]+(?:zoom\.us|meet\.google\.com|teams\.microsoft\.com|webex\.com)[^\s]*)/i);
+  return m ? m[0] : '';
+}
+
+function describeRecurrence(rrule) {
+  try {
+    const opts = rrule.origOptions || {};
+    const freq = ['yearly','monthly','weekly','daily','hourly','minutely','secondly'][opts.freq] || 'recurring';
+    const interval = opts.interval && opts.interval > 1 ? ('every ' + opts.interval + ' ' + freq + 's') : freq;
+    return interval;
+  } catch (e) {
+    return 'recurring';
+  }
 }
 
 function countAttendees(item) {
