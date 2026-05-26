@@ -185,26 +185,11 @@
         📅 Upload .ics
         <input type="file" id="ics-upload" accept=".ics" style="display:none;" />
       </label>
-      <button class="settings-btn" id="settings-btn" onclick="toggleSettings()">⚙ API key</button>
-      <button class="btn-secondary" onclick="regenerate()">↻ Re-analyze</button>
+      <button class="btn-secondary" onclick="copyPromptToClipboard()">📋 Copy prompt</button>
+      <button class="btn-secondary" onclick="openPasteModal()">📥 Paste response</button>
+      <button class="btn-secondary" onclick="openBriefingModal()">📄 Briefing</button>
     </div>
   </header>
-
-  <div class="settings-panel" id="settings-panel">
-    <label for="api-key">Anthropic API key</label>
-    <div class="settings-row">
-      <div>
-        <input type="password" id="api-key" placeholder="sk-ant-..." autocomplete="off" />
-      </div>
-      <button class="btn-primary" onclick="saveKey()">Save</button>
-      <button class="btn-secondary" onclick="clearKey()">Clear</button>
-    </div>
-    <p class="settings-hint">
-      Stored only in your browser's localStorage. Get a key at
-      <a href="https://console.anthropic.com/settings/keys" target="_blank">console.anthropic.com</a>.
-      Without a key, the demo falls back to canned mock suggestions.
-    </p>
-  </div>
 
   <div class="grid">
     <div class="card">
@@ -225,6 +210,36 @@
         </div>
       </div>
       <div id="suggestions"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Paste-response modal -->
+<div id="paste-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:12px; padding:24px; max-width:600px; width:100%; max-height:80vh; display:flex; flex-direction:column; gap:12px;">
+    <h2 style="margin:0; font-size:18px; font-weight:500;">Paste Claude's response</h2>
+    <p style="margin:0; font-size:13px; color:#666; line-height:1.5;">
+      Copy Claude's reply from claude.ai (the whole thing — markdown fences and preamble are fine) and paste it below. The tool will extract the JSON.
+    </p>
+    <textarea id="paste-input" placeholder='{"suggestions": [...] }' style="width:100%; min-height:200px; padding:12px; font-family:monospace; font-size:12px; border:1px solid #d4d4d4; border-radius:8px; resize:vertical;"></textarea>
+    <div id="paste-error" style="display:none; color:#991b1b; font-size:12px; padding:8px; background:#fee2e2; border-radius:6px;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn-secondary" onclick="closePasteModal()">Cancel</button>
+      <button class="btn-primary" onclick="applyPastedResponse()">Apply suggestions</button>
+    </div>
+  </div>
+</div>
+
+<div id="briefing-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:12px; padding:24px; max-width:720px; width:100%; max-height:90vh; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0; font-size:18px; font-weight:500;">Your week at a glance</h2>
+      <button class="btn-secondary" onclick="closeBriefingModal()" style="border:none; padding:4px 8px;">x</button>
+    </div>
+    <div id="briefing-output" style="overflow-y:auto; padding:16px; background:#fafaf9; border:1px solid #e5e5e5; border-radius:8px; font-size:14px; line-height:1.6; flex:1; white-space:pre-wrap;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn-secondary" onclick="downloadBriefing()">Download .md</button>
+      <button class="btn-primary" onclick="copyBriefing()">Copy to clipboard</button>
     </div>
   </div>
 </div>
@@ -484,44 +499,8 @@
     renderSuggestions();
   }
 
-  async function regenerate() {
-    appliedIds.clear();
-    dismissedIds.clear();
-
-    const key = getApiKey();
-    if (!key) {
-      // No key — use fallback
-      liveSuggestions = null;
-      suggestionSource = 'mock';
-      errorMessage = null;
-      renderCalendar();
-      renderSuggestions();
-      return;
-    }
-
-    // Show loading
-    suggestionSource = 'loading';
-    errorMessage = null;
-    renderSuggestions();
-
-    try {
-      const meetings = visibleMeetings();
-      const suggestions = await callClaude(key, meetings);
-      liveSuggestions = suggestions;
-      suggestionSource = 'live';
-    } catch (err) {
-      console.error(err);
-      errorMessage = err.message || 'Unknown error';
-      liveSuggestions = null;
-      suggestionSource = 'error';
-    }
-
-    renderCalendar();
-    renderSuggestions();
-  }
-
   // ============================================================
-  // Claude API integration
+  // Claude.ai copy/paste workflow
   // ============================================================
   const SYSTEM_PROMPT = `You are a productivity assistant for a busy product manager. You analyze their calendar and identify three kinds of suggestions:
 
@@ -531,7 +510,7 @@
 
 Be specific and grounded in the meeting details. Don't hallucinate context you don't have — base suggestions on the meeting title, duration, attendee count, and recurring patterns visible in the schedule. Quality over quantity: 4-7 strong suggestions beats 10 generic ones.
 
-You MUST respond with a JSON object matching this exact schema, with no preamble or markdown:
+You MUST respond with a JSON object matching this exact schema, with no preamble or other commentary. JSON only:
 
 {
   "suggestions": [
@@ -548,56 +527,135 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
   ]
 }`;
 
-  async function callClaude(apiKey, meetings) {
-    const userPrompt = `Here is my upcoming week. Generate suggestions.\n\n${JSON.stringify(meetings, null, 2)}`;
+  function buildPrompt() {
+    const meetings = visibleMeetings();
+    const summary = analyzeWeek(meetings);
+    return `${SYSTEM_PROMPT}
 
-    const response = await fetch('https://api.anthropic.com/v1/messages', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'x-api-key': apiKey,
-        'anthropic-version': '2023-06-01',
-        'anthropic-dangerous-direct-browser-access': 'true'
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        max_tokens: 2048,
-        system: SYSTEM_PROMPT,
-        messages: [{ role: 'user', content: userPrompt }]
-      })
-    });
+Here is my upcoming week. Generate suggestions.
 
-    if (!response.ok) {
-      const errBody = await response.text();
-      let msg = `HTTP ${response.status}`;
-      try {
-        const parsed = JSON.parse(errBody);
-        if (parsed.error && parsed.error.message) msg = parsed.error.message;
-      } catch (_) {}
-      throw new Error(msg);
+## Week summary
+${summary}
+
+## Meetings (raw data)
+${JSON.stringify(meetings, null, 2)}`;
+  }
+
+  // Precompute pattern signals so Claude has stronger inputs.
+  // Patterns Claude is often weak at spotting in raw JSON: total load,
+  // recurring same-group meetings, back-to-back density.
+  function analyzeWeek(meetings) {
+    if (meetings.length === 0) return '(no meetings)';
+
+    const totalMin = meetings.reduce((s, m) => s + m.duration, 0);
+    const dayLoad = {};
+    for (const m of meetings) {
+      dayLoad[m.day] = (dayLoad[m.day] || 0) + m.duration;
+    }
+    const busiestDay = Object.entries(dayLoad).sort((a, b) => b[1] - a[1])[0];
+
+    // Title repeats — same title 2+ times in the week
+    const titleCounts = {};
+    for (const m of meetings) {
+      const k = m.title.trim().toLowerCase();
+      titleCounts[k] = (titleCounts[k] || 0) + 1;
+    }
+    const recurring = Object.entries(titleCounts)
+      .filter(([, c]) => c >= 2)
+      .map(([t, c]) => `"${t}" × ${c}`);
+
+    // Back-to-back: count days with 3+ meetings or chains of meetings <15min apart
+    const byDay = {};
+    for (const m of meetings) {
+      (byDay[m.day] = byDay[m.day] || []).push(m);
+    }
+    const heavyDays = Object.entries(byDay)
+      .filter(([, list]) => list.length >= 4)
+      .map(([d, list]) => `${d}: ${list.length} meetings`);
+
+    // Oversized attendee counts
+    const broadcasts = meetings.filter(m => m.attendees >= 10);
+
+    const lines = [
+      `Total meeting load: ${(totalMin / 60).toFixed(1)} hours across ${meetings.length} meetings`,
+      `Busiest day: ${busiestDay[0]} (${(busiestDay[1] / 60).toFixed(1)} hours)`,
+    ];
+    if (recurring.length) lines.push(`Recurring titles: ${recurring.join(', ')}`);
+    if (heavyDays.length) lines.push(`Heavy days: ${heavyDays.join('; ')}`);
+    if (broadcasts.length) lines.push(`Large meetings (10+ attendees): ${broadcasts.length}`);
+
+    return lines.join('\n');
+  }
+
+  async function copyPromptToClipboard() {
+    const meetings = visibleMeetings();
+    if (meetings.length === 0) {
+      alert('No meetings to analyze. Upload a calendar or change the filter.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(buildPrompt());
+      // Brief visual confirmation
+      const btn = event.target;
+      const original = btn.textContent;
+      btn.textContent = '✓ Copied! Open claude.ai';
+      setTimeout(() => { btn.textContent = original; }, 2500);
+    } catch (err) {
+      alert('Clipboard copy failed. Falling back to a window — copy from there.');
+      const w = window.open('', '_blank');
+      w.document.write(`<pre style="white-space:pre-wrap; padding:20px; font-family:monospace;">${escapeHtml(buildPrompt())}</pre>`);
+    }
+  }
+
+  function openPasteModal() {
+    document.getElementById('paste-modal').style.display = 'flex';
+    document.getElementById('paste-input').value = '';
+    document.getElementById('paste-error').style.display = 'none';
+    setTimeout(() => document.getElementById('paste-input').focus(), 50);
+  }
+
+  function closePasteModal() {
+    document.getElementById('paste-modal').style.display = 'none';
+  }
+
+  function applyPastedResponse() {
+    const raw = document.getElementById('paste-input').value.trim();
+    const errBox = document.getElementById('paste-error');
+    errBox.style.display = 'none';
+
+    if (!raw) {
+      showPasteError('Paste Claude\'s response first.');
+      return;
     }
 
-    const data = await response.json();
-    const text = (data.content || []).map(b => b.text || '').join('').trim();
-
-    // Strip markdown fences if Claude wrapped them despite instructions
-    const cleaned = text.replace(/^```(?:json)?\s*/i, '').replace(/\s*```\s*$/, '');
+    // Try to extract JSON from the pasted text. Strategies in order:
+    // 1. Strip markdown fences
+    // 2. Find the first '{' and matching final '}' (Claude sometimes adds preamble)
+    let cleaned = raw.replace(/```(?:json)?\s*/gi, '').replace(/```/g, '').trim();
+    const firstBrace = cleaned.indexOf('{');
+    const lastBrace = cleaned.lastIndexOf('}');
+    if (firstBrace === -1 || lastBrace === -1 || lastBrace < firstBrace) {
+      showPasteError('Couldn\'t find a JSON object in that text.');
+      return;
+    }
+    cleaned = cleaned.slice(firstBrace, lastBrace + 1);
 
     let parsed;
     try {
       parsed = JSON.parse(cleaned);
     } catch (e) {
-      throw new Error('Claude returned malformed JSON. See console for raw response.');
+      showPasteError('That isn\'t valid JSON. Check Claude\'s response — it should be a single JSON object.');
+      return;
     }
 
     if (!parsed.suggestions || !Array.isArray(parsed.suggestions)) {
-      throw new Error('Response missing suggestions array.');
+      showPasteError('JSON is missing a "suggestions" array.');
+      return;
     }
 
-    // Validate + filter
     const validKinds = new Set(['automate', 'prep', 'protect']);
-    const meetingIds = new Set(meetings.map(m => m.id));
-    return parsed.suggestions
+    const meetingIds = new Set(visibleMeetings().map(m => m.id));
+    const cleaned_suggestions = parsed.suggestions
       .filter(s => s && s.meetingId && meetingIds.has(s.meetingId) && validKinds.has(s.kind))
       .map((s, i) => ({
         id: s.id || `live-${i}`,
@@ -609,50 +667,26 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
         note: String(s.note || '').slice(0, 100),
         action: String(s.action || 'Apply').slice(0, 60)
       }));
-  }
 
-  // ============================================================
-  // API key management (localStorage)
-  // ============================================================
-  const KEY_STORAGE = 'pm-tool-anthropic-key';
-  function getApiKey() {
-    return localStorage.getItem(KEY_STORAGE) || '';
-  }
-  function saveKey() {
-    const val = document.getElementById('api-key').value.trim();
-    if (val) localStorage.setItem(KEY_STORAGE, val);
-    document.getElementById('settings-panel').classList.remove('open');
-    updateSettingsButton();
-    // Trigger an analyze run with the new key
-    regenerate();
-  }
-  function clearKey() {
-    localStorage.removeItem(KEY_STORAGE);
-    document.getElementById('api-key').value = '';
-    updateSettingsButton();
-    // Fall back to mock
-    liveSuggestions = null;
-    suggestionSource = 'mock';
+    if (cleaned_suggestions.length === 0) {
+      showPasteError(`No valid suggestions found. ${parsed.suggestions.length} were rejected — usually because meetingId values don't match the current week's meetings.`);
+      return;
+    }
+
+    appliedIds.clear();
+    dismissedIds.clear();
+    liveSuggestions = cleaned_suggestions;
+    suggestionSource = 'live';
     errorMessage = null;
+    closePasteModal();
     renderCalendar();
     renderSuggestions();
   }
-  function toggleSettings() {
-    const panel = document.getElementById('settings-panel');
-    panel.classList.toggle('open');
-    if (panel.classList.contains('open')) {
-      document.getElementById('api-key').value = getApiKey();
-    }
-  }
-  function updateSettingsButton() {
-    const btn = document.getElementById('settings-btn');
-    if (getApiKey()) {
-      btn.textContent = '⚙ API key set';
-      btn.classList.remove('unset');
-    } else {
-      btn.textContent = '⚙ Add API key';
-      btn.classList.add('unset');
-    }
+
+  function showPasteError(msg) {
+    const errBox = document.getElementById('paste-error');
+    errBox.textContent = msg;
+    errBox.style.display = 'block';
   }
 
   // ============================================================
@@ -747,6 +781,73 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
     else if (weekOffset === -1) label.textContent = 'Last week';
     else label.textContent = weekOffset > 0 ? `+${weekOffset} weeks` : `${weekOffset} weeks`;
   }
+  function openBriefingModal() {
+    document.getElementById('briefing-output').textContent = generateBriefing();
+    document.getElementById('briefing-modal').style.display = 'flex';
+  }
+  function closeBriefingModal() {
+    document.getElementById('briefing-modal').style.display = 'none';
+  }
+  function generateBriefing() {
+    const meetings = visibleMeetings();
+    const sugs = currentSuggestions().filter(s => meetings.find(m => m.id === s.meetingId));
+    const applied = sugs.filter(s => appliedIds.has(s.id));
+    const pending = sugs.filter(s => !appliedIds.has(s.id) && !dismissedIds.has(s.id));
+    const totalMin = meetings.reduce((a, m) => a + m.duration, 0);
+    const savedMin = applied.reduce((a, x) => a + x.savedMin, 0);
+    const dayLoad = {};
+    for (const m of meetings) dayLoad[m.day] = (dayLoad[m.day] || 0) + m.duration;
+    const sortedDays = Object.entries(dayLoad).sort((a, b) => b[1] - a[1]);
+    const lines = [];
+    lines.push('# Your week at a glance');
+    lines.push('');
+    lines.push('## The shape of your week');
+    lines.push('- ' + (totalMin/60).toFixed(1) + ' hours across ' + meetings.length + ' meetings');
+    if (sortedDays.length) lines.push('- Heaviest day: ' + sortedDays[0][0] + ' (' + (sortedDays[0][1]/60).toFixed(1) + ' hours)');
+    lines.push('');
+    const sections = [['automate', 'What Claude is doing for you'], ['prep', 'Read before your meetings'], ['protect', 'Worth questioning']];
+    for (const [kind, header] of sections) {
+      const items = sugs.filter(s => s.kind === kind);
+      if (!items.length) continue;
+      lines.push('## ' + header);
+      for (const s of items) {
+        const m = meetings.find(m => m.id === s.meetingId);
+        const mark = appliedIds.has(s.id) ? '[x]' : '[ ]';
+        lines.push('- ' + mark + ' ' + s.title + (m ? ' (' + m.day + ' ' + m.time + ', ' + m.title + ')' : ''));
+        lines.push('  ' + s.body);
+      }
+      lines.push('');
+    }
+    if (savedMin > 0) {
+      lines.push('## Time back this week');
+      lines.push(formatHours(savedMin) + ' reclaimed from ' + applied.length + ' applied suggestion(s).');
+      lines.push('');
+    } else if (pending.length) {
+      const pm = pending.reduce((a, x) => a + x.savedMin, 0);
+      lines.push('## Time back available');
+      lines.push(pending.length + ' pending suggestions could free up ' + formatHours(pm) + '.');
+      lines.push('');
+    }
+    if (sugs.length === 0) {
+      lines.push('Use Copy prompt -> paste into claude.ai -> paste response back to populate this briefing.');
+    }
+    return lines.join('\n');
+  }
+  async function copyBriefing() {
+    const t = document.getElementById('briefing-output').textContent;
+    try { await navigator.clipboard.writeText(t); alert('Copied!'); } catch(e) { alert('Copy failed'); }
+  }
+  function downloadBriefing() {
+    const t = document.getElementById('briefing-output').textContent;
+    const blob = new Blob([t], {type:'text/markdown'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'briefing-' + new Date().toISOString().slice(0,10) + '.md';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // ============================================================
   // Wire up
   // ============================================================
@@ -760,7 +861,6 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
     if (e.target.files && e.target.files[0]) handleUpload(e.target.files[0]);
   });
 
-  updateSettingsButton();
   updateWeekLabel();
   renderCalendar();
   renderSuggestions();
