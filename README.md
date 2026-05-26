@@ -74,3 +74,4 @@ Search `index.html` for these markers:
 - LLM: Claude Sonnet 4.6 via the messages endpoint
 - No backend yet
 # pm-calendar-assistant
+# pm-calendar-assistant
