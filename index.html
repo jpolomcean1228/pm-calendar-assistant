@@ -589,7 +589,6 @@ You MUST respond with a JSON object matching this exact schema, with no preamble
       localStorage.removeItem(PROMPT_STORAGE);
     }
     updatePromptButton();
-  updateContextButton();
     closePromptModal();
   }
   function resetPromptToDefault() {
@@ -873,7 +872,6 @@ ${JSON.stringify(meetings, null, 2)}`;
       renderCalendar();
       renderSuggestions();
       updateWeekLabel();
-  updatePromptButton();
     } catch (err) {
       document.getElementById('calendar').innerHTML =
         `<div class="error">${err.message}</div>`;
@@ -977,6 +975,8 @@ ${JSON.stringify(meetings, null, 2)}`;
   });
 
   updateWeekLabel();
+  updatePromptButton();
+  updateContextButton();
   renderCalendar();
   renderSuggestions();
 </script>
