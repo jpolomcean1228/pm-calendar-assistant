@@ -187,6 +187,7 @@
       </label>
       <button class="btn-secondary" onclick="copyPromptToClipboard()">📋 Copy prompt</button>
       <button class="btn-secondary" onclick="openPasteModal()">📥 Paste response</button>
+      <button class="btn-secondary" onclick="openBriefingModal()">📄 Briefing</button>
     </div>
   </header>
 
@@ -225,6 +226,20 @@
     <div style="display:flex; gap:8px; justify-content:flex-end;">
       <button class="btn-secondary" onclick="closePasteModal()">Cancel</button>
       <button class="btn-primary" onclick="applyPastedResponse()">Apply suggestions</button>
+    </div>
+  </div>
+</div>
+
+<div id="briefing-modal" style="display:none; position:fixed; top:0; left:0; right:0; bottom:0; background:rgba(0,0,0,0.5); z-index:100; align-items:center; justify-content:center; padding:20px;">
+  <div style="background:white; border-radius:12px; padding:24px; max-width:720px; width:100%; max-height:90vh; display:flex; flex-direction:column; gap:12px;">
+    <div style="display:flex; justify-content:space-between; align-items:center;">
+      <h2 style="margin:0; font-size:18px; font-weight:500;">Your week at a glance</h2>
+      <button class="btn-secondary" onclick="closeBriefingModal()" style="border:none; padding:4px 8px;">x</button>
+    </div>
+    <div id="briefing-output" style="overflow-y:auto; padding:16px; background:#fafaf9; border:1px solid #e5e5e5; border-radius:8px; font-size:14px; line-height:1.6; flex:1; white-space:pre-wrap;"></div>
+    <div style="display:flex; gap:8px; justify-content:flex-end;">
+      <button class="btn-secondary" onclick="downloadBriefing()">Download .md</button>
+      <button class="btn-primary" onclick="copyBriefing()">Copy to clipboard</button>
     </div>
   </div>
 </div>
@@ -766,6 +781,73 @@ ${JSON.stringify(meetings, null, 2)}`;
     else if (weekOffset === -1) label.textContent = 'Last week';
     else label.textContent = weekOffset > 0 ? `+${weekOffset} weeks` : `${weekOffset} weeks`;
   }
+  function openBriefingModal() {
+    document.getElementById('briefing-output').textContent = generateBriefing();
+    document.getElementById('briefing-modal').style.display = 'flex';
+  }
+  function closeBriefingModal() {
+    document.getElementById('briefing-modal').style.display = 'none';
+  }
+  function generateBriefing() {
+    const meetings = visibleMeetings();
+    const sugs = currentSuggestions().filter(s => meetings.find(m => m.id === s.meetingId));
+    const applied = sugs.filter(s => appliedIds.has(s.id));
+    const pending = sugs.filter(s => !appliedIds.has(s.id) && !dismissedIds.has(s.id));
+    const totalMin = meetings.reduce((a, m) => a + m.duration, 0);
+    const savedMin = applied.reduce((a, x) => a + x.savedMin, 0);
+    const dayLoad = {};
+    for (const m of meetings) dayLoad[m.day] = (dayLoad[m.day] || 0) + m.duration;
+    const sortedDays = Object.entries(dayLoad).sort((a, b) => b[1] - a[1]);
+    const lines = [];
+    lines.push('# Your week at a glance');
+    lines.push('');
+    lines.push('## The shape of your week');
+    lines.push('- ' + (totalMin/60).toFixed(1) + ' hours across ' + meetings.length + ' meetings');
+    if (sortedDays.length) lines.push('- Heaviest day: ' + sortedDays[0][0] + ' (' + (sortedDays[0][1]/60).toFixed(1) + ' hours)');
+    lines.push('');
+    const sections = [['automate', 'What Claude is doing for you'], ['prep', 'Read before your meetings'], ['protect', 'Worth questioning']];
+    for (const [kind, header] of sections) {
+      const items = sugs.filter(s => s.kind === kind);
+      if (!items.length) continue;
+      lines.push('## ' + header);
+      for (const s of items) {
+        const m = meetings.find(m => m.id === s.meetingId);
+        const mark = appliedIds.has(s.id) ? '[x]' : '[ ]';
+        lines.push('- ' + mark + ' ' + s.title + (m ? ' (' + m.day + ' ' + m.time + ', ' + m.title + ')' : ''));
+        lines.push('  ' + s.body);
+      }
+      lines.push('');
+    }
+    if (savedMin > 0) {
+      lines.push('## Time back this week');
+      lines.push(formatHours(savedMin) + ' reclaimed from ' + applied.length + ' applied suggestion(s).');
+      lines.push('');
+    } else if (pending.length) {
+      const pm = pending.reduce((a, x) => a + x.savedMin, 0);
+      lines.push('## Time back available');
+      lines.push(pending.length + ' pending suggestions could free up ' + formatHours(pm) + '.');
+      lines.push('');
+    }
+    if (sugs.length === 0) {
+      lines.push('Use Copy prompt -> paste into claude.ai -> paste response back to populate this briefing.');
+    }
+    return lines.join('\n');
+  }
+  async function copyBriefing() {
+    const t = document.getElementById('briefing-output').textContent;
+    try { await navigator.clipboard.writeText(t); alert('Copied!'); } catch(e) { alert('Copy failed'); }
+  }
+  function downloadBriefing() {
+    const t = document.getElementById('briefing-output').textContent;
+    const blob = new Blob([t], {type:'text/markdown'});
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'briefing-' + new Date().toISOString().slice(0,10) + '.md';
+    document.body.appendChild(a); a.click(); document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  }
+
   // ============================================================
   // Wire up
   // ============================================================
